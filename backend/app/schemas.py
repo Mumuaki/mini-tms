@@ -55,7 +55,7 @@ class FreightResponse(FreightBase):
 class ScrapeRequest(BaseModel):
     origin: Optional[str] = None  # "SK, 93101" or leave empty for GPS
     destination: str = Field(..., description="Destination city/postal code")
-    loadingDateFrom: Optional[str] = None  # YYYY-MM-DD
+    loadingDateFrom: Optional[str] = None  # DD-MM-YYYY
     loadingDateTo: Optional[str] = None
     unloadingDateFrom: Optional[str] = None
     unloadingDateTo: Optional[str] = None
