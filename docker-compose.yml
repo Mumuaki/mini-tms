@@ -1,1 +1,92 @@
+version: '3.8'
+
+services:
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mini-tms-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    networks:
+      - mini-tms-network
+    depends_on:
+      - backend
+
+  # Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mini-tms-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:///./mini_tms.db
+      GPS_DOZOR_API_KEY: ${GPS_DOZOR_API_KEY}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ENVIRONMENT: development
+      DEBUG: "True"
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:3000
+      ENABLE_BACKGROUND_TASKS: "True"
+    volumes:
+      - ./backend:/app
+      - ./backend/mini_tms.db:/app/mini_tms.db
+    networks:
+      - mini-tms-network
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Database (Optional - для production)
+  postgres:
+    image: postgres:15-alpine
+    container_name: mini-tms-db
+    environment:
+      POSTGRES_DB: mini_tms
+      POSTGRES_USER: tms_user
+      POSTGRES_PASSWORD: tms_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mini-tms-network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tms_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (Optional - для кэширования)
+  redis:
+    image: redis:7-alpine
+    container_name: mini-tms-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - mini-tms-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  mini-tms-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
 
