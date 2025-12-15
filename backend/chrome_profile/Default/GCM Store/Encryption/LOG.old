@@ -1,0 +1,4 @@
+2025/12/10-19:20:19.088 23e8 Reusing MANIFEST D:\TransEU\TMSmini_.vGemini\backend\chrome_profile\Default\GCM Store\Encryption/MANIFEST-000001
+2025/12/10-19:20:19.088 23e8 Recovering log #3
+2025/12/10-19:20:19.089 23e8 (ignoring error) D:\TransEU\TMSmini_.vGemini\backend\chrome_profile\Default\GCM Store\Encryption/000003.log: dropping 2335 bytes; Corruption: checksum mismatch
+2025/12/10-19:20:19.089 23e8 Reusing old log D:\TransEU\TMSmini_.vGemini\backend\chrome_profile\Default\GCM Store\Encryption/000003.log 

@@ -1,0 +1,20 @@
+{
+  "name": "frontend",
+  "root": "frontend",
+  "sourceRoot": "frontend/src",
+  "projectType": "application",
+  "targets": {
+    "serve": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "cd frontend && npm run dev" }], "cwd": "."}
+    },
+    "build": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "cd frontend && npm run build" }], "outputs": ["frontend/dist"] }
+    },
+    "test": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "cd frontend && npm test" }] }
+    }
+  }
+}

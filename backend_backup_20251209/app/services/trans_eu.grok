@@ -1,0 +1,977 @@
+import os
+import asyncio
+from playwright.async_api import async_playwright, Browser, Page
+from datetime import datetime
+from typing import List, Dict, Optional
+
+
+class TransEuScraper:
+    """Сервис для получения грузов с Trans.eu через автоматизацию браузера."""
+
+    def __init__(self):
+        self.username = os.getenv("TRANS_USER")
+        self.password = os.getenv("TRANS_PASSWORD")
+        self.base_url = "https://www.trans.eu"
+        self.login_url = "https://auth.platform.trans.eu/accounts/login"
+        self.freights_url = "https://platform.trans.eu/exchange/offers"
+
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
+        self.is_logged_in = False
+
+    # ---------------------------------------------------------------------
+    # Browser handling
+    # ---------------------------------------------------------------------
+    async def start_browser(self, headless: bool = True):
+        """Запуск браузера (пытаемся подключиться к уже запущенному CDP)."""
+        playwright = await async_playwright().start()
+
+        # Try to connect to an existing Chrome instance via CDP
+        try:
+            self.browser = await playwright.chromium.connect_over_cdp(
+                "http://localhost:9222"
+            )
+            if self.browser.contexts:
+                context = self.browser.contexts[0]
+                self.page = context.pages[0] if context.pages else await context.new_page()
+            else:
+                pass
+            print("✓ Connected to existing browser via CDP")
+            return
+        except Exception:
+            print("Could not connect to existing browser, launching new one...")
+
+        # Fallback: launch a fresh Chromium instance
+        self.browser = await playwright.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
+        )
+        context = await self.browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="ru-RU",
+            timezone_id="Europe/Moscow",
+        )
+        # Hide automation flag
+        await context.add_init_script(
+            """
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            """
+        )
+        self.page = await context.new_page()
+        self.page.set_default_timeout(60_000)
+        print("✓ Browser started")
+
+    # ---------------------------------------------------------------------
+    # Login
+    # ---------------------------------------------------------------------
+    async def login(self):
+        """Вход в систему Trans.eu."""
+        if not self.page:
+            await self.start_browser()
+
+        if not self.username or not self.password:
+            raise ValueError("TRANS_USER and TRANS_PASSWORD must be set in .env")
+
+        print(f"Navigating to {self.login_url}...")
+        try:
+            await self.page.goto(self.login_url, wait_until="domcontentloaded", timeout=60_000)
+            print("✓ Page loaded")
+        except Exception as e:
+            print(f"Warning: Page load timeout, but continuing: {e}")
+
+        # Already logged in?
+        current_url = self.page.url
+        if "login" not in current_url.lower() and "auth" not in current_url.lower():
+            print(f"Already logged in (URL: {current_url})")
+            self.is_logged_in = True
+            return
+
+        # ---- locate email field ------------------------------------------------
+        email_selectors = [
+            'input[name="login"]',
+            'input[name="email"]',
+            'input[type="email"]',
+            'input[name="username"]',
+        ]
+        email_input = None
+        for selector in email_selectors:
+            try:
+                email_input = await self.page.wait_for_selector(selector, timeout=5_000)
+                if email_input:
+                    print(f'✓ Found email input with selector: {selector}')
+                    break
+            except Exception:
+                continue
+
+        if not email_input:
+            await self.page.screenshot(path="login_page_debug.png")
+            raise Exception(
+                "Could not find email input field. Screenshot saved to login_page_debug.png"
+            )
+
+        await email_input.fill(self.username)
+        print(f"✓ Entered username: {self.username}")
+
+        # ---- locate password field ---------------------------------------------
+        password_selectors = [
+            'input[name="password"]',
+            'input[type="password"]',
+        ]
+        password_input = None
+        for selector in password_selectors:
+            try:
+                password_input = await self.page.wait_for_selector(selector, timeout=5_000)
+                if password_input:
+                    print(f'✓ Found password input with selector: {selector}')
+                    break
+            except Exception:
+                continue
+
+        if not password_input:
+            await self.page.screenshot(path="login_page_debug.png")
+            raise Exception("Could not find password input field")
+
+        await password_input.fill(self.password)
+        print("✓ Entered password")
+
+        # ---- submit ------------------------------------------------------------
+        submit_selectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button:has-text("Войти")',
+            'button:has-text("Login")',
+            'button:has-text("Sign in")',
+        ]
+        submit_button = None
+        for selector in submit_selectors:
+            try:
+                submit_button = await self.page.wait_for_selector(selector, timeout=3_000)
+                if submit_button:
+                    print(f'✓ Found submit button with selector: {selector}')
+                    break
+            except Exception:
+                continue
+
+        if submit_button:
+            await submit_button.click()
+            print("✓ Clicked login button")
+        else:
+            await password_input.press("Enter")
+            print("✓ Pressed Enter to submit")
+
+        # ---- wait for navigation ------------------------------------------------
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=30_000)
+        except Exception:
+            print("Warning: Timeout waiting for networkidle, continuing...")
+
+        await asyncio.sleep(2)
+
+        # ---- final check --------------------------------------------------------
+        current_url = self.page.url
+        print(f"Current URL after login: {current_url}")
+        if "login" in current_url.lower() or "auth" in current_url.lower():
+            await self.page.screenshot(path="login_failed_debug.png")
+            error_text = await self.page.evaluate(
+                """
+                () => {
+                    const errorElements = document.querySelectorAll('.error, .alert, [class*="error"], [class*="alert"]');
+                    return Array.from(errorElements).map(el => el.textContent).join('; ');
+                }
+                """
+            )
+            if error_text:
+                raise Exception(f"Login failed with error: {error_text}")
+            else:
+                print("Warning: Still on login page, but no error found. Might be successful.")
+                self.is_logged_in = True
+        else:
+            self.is_logged_in = True
+
+    # ---------------------------------------------------------------------
+    # Search freights
+    # ---------------------------------------------------------------------
+    async def search_freights(self, filters: Optional[Dict] = None) -> List[Dict]:
+        """Поиск грузов на Trans.eu."""
+        if not self.is_logged_in:
+            await self.login()
+
+        print("Navigating to freights page...")
+        try:
+            await self.page.goto(
+                self.freights_url,
+                wait_until="domcontentloaded",
+                timeout=180_000,
+            )
+            print("✓ Freights page loaded (domcontentloaded)")
+        except Exception as e:
+            print(f"Warning: domcontentloaded timeout – {e}, retrying with networkidle")
+            await self.page.goto(
+                self.freights_url,
+                wait_until="networkidle",
+                timeout=180_000,
+            )
+            print("✓ Freights page loaded (networkidle)")
+
+        # Wait for at least one freight row to appear
+        try:
+            print("Waiting for freight rows...")
+            await self.page.wait_for_selector('[data-ctx="row"]', timeout=20_000)
+            print("✓ Freight rows appeared")
+        except Exception as e:
+            print(f"Warning: Timeout waiting for [data-ctx='row']: {e}")
+
+        await asyncio.sleep(2)
+
+        # Apply filters if supplied
+        if filters:
+            await self._apply_filters(filters)
+
+        # Parse the resulting list
+        freights = await self._parse_freight_list()
+        print(f"✓ Found {len(freights)} freights")
+        return freights
+
+    # ---------------------------------------------------------------------
+    # Click "Дополнительная информация" with maximum content
+    # ---------------------------------------------------------------------
+    async def _click_best_additional_info_button(self):
+        """
+        Находит все кнопки "Дополнительная информация" и кликает по той,
+        которая содержит максимум информации (по длине текста или числу строк).
+        """
+        print("\n" + "=" * 60)
+        print("Looking for 'Дополнительная информация' button with most content...")
+        print("=" * 60)
+        
+        try:
+            # Ждём появления кнопок
+            await asyncio.sleep(1)
+            
+            # Ищем все кнопки с текстом "Дополнительная информация"
+            buttons = await self.page.query_selector_all(
+                'button:has-text("Дополнительная информация"), '
+                'a:has-text("Дополнительная информация"), '
+                'div[role="button"]:has-text("Дополнительная информация")'
+            )
+            
+            if not buttons:
+                # Попробуем альтернативные селекторы
+                buttons = await self.page.query_selector_all(
+                    '[class*="additional"], [class*="info-button"], [data-ctx*="additional"]'
+                )
+            
+            if not buttons:
+                print("⚠ No 'Дополнительная информация' buttons found, skipping...")
+                return False
+            
+            print(f"Found {len(buttons)} potential buttons")
+            
+            # Оцениваем каждую кнопку по "информативности"
+            best_button = None
+            best_score = -1
+            
+            for i, btn in enumerate(buttons):
+                try:
+                    # Проверяем видимость
+                    is_visible = await btn.is_visible()
+                    if not is_visible:
+                        continue
+                    
+                    # Получаем текст кнопки и её контейнера
+                    text = await btn.inner_text()
+                    
+                    # Также смотрим на родительский контейнер для оценки контента
+                    parent_text = await btn.evaluate('el => el.parentElement?.innerText || ""')
+                    
+                    # Считаем "информативность" по количеству строк и длине текста
+                    score = len(text.split('\n')) + len(parent_text) // 100
+                    
+                    print(f"  Button {i + 1}: score={score}, text='{text[:50]}...'")
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_button = btn
+                        
+                except Exception as e:
+                    print(f"  Error evaluating button {i + 1}: {e}")
+                    continue
+            
+            if best_button:
+                print(f"✓ Clicking best button with score {best_score}")
+                await best_button.click()
+                await asyncio.sleep(1)
+                print("✓ 'Дополнительная информация' button clicked successfully")
+                return True
+            else:
+                print("⚠ No suitable button found")
+                return False
+                
+        except Exception as e:
+            print(f"Error clicking 'Дополнительная информация': {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # ---------------------------------------------------------------------
+    # Set radius "+ 75 km"
+    # ---------------------------------------------------------------------
+    async def _set_radius(self, label_text: str, radius: str = "+ 75 km"):
+        """
+        Устанавливает радиус поиска для поля локации.
+        """
+        print(f"Setting radius {radius} for {label_text}...")
+        
+        try:
+            # Находим контейнер поля по лейблу
+            label_locator = self.page.get_by_text(label_text, exact=True).first
+            
+            # Поднимаемся к родительскому контейнеру
+            container = label_locator.locator("xpath=ancestor::div[contains(@class, 'field') or contains(@data-ctx, 'place')]").first
+            
+            # Если не нашли по классу, пробуем подняться на несколько уровней
+            if await container.count() == 0:
+                container = label_locator.locator("..").locator("..")
+            
+            # Ищем выпадающий список радиуса
+            # Обычно это кнопка или селект рядом с полем локации
+            radius_selectors = [
+                'button:has-text("km")',
+                'select:has-text("km")',
+                '[class*="radius"]',
+                '[class*="distance"]',
+                'button:has-text("+ 0")',
+                '[data-ctx*="radius"]',
+            ]
+            
+            radius_dropdown = None
+            for selector in radius_selectors:
+                try:
+                    dropdown = container.locator(selector).first
+                    if await dropdown.count() > 0 and await dropdown.is_visible():
+                        radius_dropdown = dropdown
+                        print(f"✓ Found radius dropdown with selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            # Если не нашли в контейнере, ищем глобально рядом с полем
+            if not radius_dropdown:
+                try:
+                    # Ищем любой элемент с "km" рядом с полем
+                    radius_dropdown = self.page.locator(f'text="{label_text}"').locator("..").locator("..").locator('button:has-text("km"), [class*="radius"]').first
+                    if await radius_dropdown.count() == 0:
+                        radius_dropdown = None
+                except:
+                    pass
+            
+            if not radius_dropdown:
+                print(f"⚠ Radius dropdown not found for {label_text}, trying alternative approach...")
+                
+                # Альтернативный подход: ищем все элементы с "km" на странице
+                all_km_elements = await self.page.query_selector_all('button:has-text("km"), [class*="radius"]')
+                for elem in all_km_elements:
+                    if await elem.is_visible():
+                        radius_dropdown = elem
+                        print("✓ Found radius element globally")
+                        break
+            
+            if radius_dropdown:
+                # Кликаем по дропдауну чтобы открыть список
+                await radius_dropdown.click()
+                await asyncio.sleep(0.5)
+                
+                # Ищем опцию "+ 75 km"
+                option_found = False
+                
+                # Пробуем разные способы найти опцию
+                for option_selector in [
+                    f'text="{radius}"',
+                    f'li:has-text("{radius}")',
+                    f'div[role="option"]:has-text("{radius}")',
+                    f'option:has-text("{radius}")',
+                    f'[class*="option"]:has-text("{radius}")',
+                ]:
+                    try:
+                        option = self.page.locator(option_selector).first
+                        if await option.count() > 0 and await option.is_visible():
+                            await option.click()
+                            option_found = True
+                            print(f"✓ Selected radius: {radius}")
+                            break
+                    except:
+                        continue
+                
+                if not option_found:
+                    # Пробуем выбрать через клавиатуру
+                    print("Trying keyboard navigation for radius...")
+                    await self.page.keyboard.type("75")
+                    await asyncio.sleep(0.3)
+                    await self.page.keyboard.press("Enter")
+                
+                await asyncio.sleep(0.5)
+                return True
+            else:
+                print(f"⚠ Could not find radius selector for {label_text}")
+                return False
+                
+        except Exception as e:
+            print(f"Error setting radius: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    # ---------------------------------------------------------------------
+    # Apply filters
+    # ---------------------------------------------------------------------
+    async def _apply_filters(self, filters: Dict):
+        """Применение фильтров поиска."""
+        print(f"\n{'='*60}")
+        print(f"Applying filters: {filters}")
+        print(f"{'='*60}")
+
+        # 1️⃣ Expand the filter panel (if the button exists)
+        try:
+            expand_btn = await self.page.wait_for_selector(
+                'button:has-text("Развернуть фильтры")', timeout=3_000
+            )
+            if expand_btn:
+                await expand_btn.click()
+                print('✓ Clicked "Развернуть фильтры" button')
+                await asyncio.sleep(1)
+        except Exception:
+            pass
+
+        # ---------------------------------------------------------------------
+        # Helper: Set Location with modal handling
+        # ---------------------------------------------------------------------
+        async def set_location_strict(label_text: str, value: str) -> bool:
+            """
+            Sets location in Trans.eu filter using modal window.
+            
+            Steps:
+            1. Find and click the main location field
+            2. Wait for modal window to appear
+            3. Find search input in modal
+            4. Type the location value
+            5. Wait for suggestions and click first one
+            6. Click "Дополнительная информация" button (the best one)
+            7. Set radius "+ 75 km"
+            8. Verify value was set
+            """
+            print(f"\n{'='*60}")
+            print(f"Setting {label_text} to: {value}")
+            print(f"{'='*60}")
+            
+            try:
+                # Step 1: Find and click the main location field
+                print(f"[1/8] Looking for field with label '{label_text}'...")
+                
+                # Находим лейбл
+                label_locator = self.page.get_by_text(label_text, exact=True).first
+                
+                # Находим input рядом с лейблом
+                input_field = None
+                
+                # Способ 1: через evaluate
+                try:
+                    input_handle = await label_locator.evaluate_handle('''
+                        (label) => {
+                            let container = label.closest('[data-ctx="place-field"]');
+                            if (!container) {
+                                container = label.parentElement?.parentElement?.parentElement;
+                            }
+                            return container?.querySelector('input[type="text"]');
+                        }
+                    ''')
+                    input_field = input_handle.as_element()
+                except:
+                    pass
+                
+                # Способ 2: через locator
+                if not input_field:
+                    try:
+                        input_locator = label_locator.locator("..").locator("..").locator('input[type="text"]').first
+                        if await input_locator.count() > 0:
+                            input_field = await input_locator.element_handle()
+                    except:
+                        pass
+                
+                # Способ 3: ищем глобально
+                if not input_field:
+                    try:
+                        # Находим все input'ы и выбираем тот, что ближе к лейблу
+                        inputs = await self.page.query_selector_all('input[type="text"]')
+                        label_box = await label_locator.bounding_box()
+                        
+                        if label_box:
+                            min_distance = float('inf')
+                            for inp in inputs:
+                                inp_box = await inp.bounding_box()
+                                if inp_box:
+                                    # Считаем расстояние
+                                    distance = abs(inp_box['y'] - label_box['y'])
+                                    if distance < min_distance and distance < 100:
+                                        min_distance = distance
+                                        input_field = inp
+                    except:
+                        pass
+                
+                if not input_field:
+                    print(f"❌ Error: Could not find input field for {label_text}")
+                    await self.page.screenshot(path=f"error_no_input_{label_text}.png")
+                    return False
+                
+                print(f"✓ Found input field")
+                
+                # Step 2: Click on the input to open modal
+                print(f"[2/8] Clicking input field to open modal...")
+                await input_field.click()
+                await asyncio.sleep(1.5)
+                
+                # Step 3: Wait for modal window to appear
+                print(f"[3/8] Waiting for modal window...")
+                
+                modal = None
+                for selector in [
+                    'div[role="dialog"]',
+                    '[class*="modal"]',
+                    '[class*="popup"]',
+                    '[class*="dropdown"]',
+                ]:
+                    try:
+                        modal = await self.page.wait_for_selector(selector, timeout=3_000, state='visible')
+                        if modal:
+                            print(f"✓ Modal appeared with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                # Step 4: Find search input in modal
+                print(f"[4/8] Looking for search input in modal...")
+                
+                search_input = None
+                
+                for selector in [
+                    'input[placeholder="Найти"]',
+                    'input[placeholder*="Szukaj"]',
+                    'input[placeholder*="Search"]',
+                    'input[type="search"]',
+                    'div[role="dialog"] input[type="text"]',
+                    '[class*="modal"] input[type="text"]',
+                    'input:focus',
+                ]:
+                    try:
+                        search_input = await self.page.wait_for_selector(selector, timeout=2_000, state='visible')
+                        if search_input:
+                            print(f"✓ Found search input: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not search_input:
+                    print(f"❌ Error: Could not find search input in modal")
+                    await self.page.screenshot(path=f"error_no_modal_input_{label_text}.png")
+                    return False
+                
+                # Step 5: Type the location value
+                print(f"[5/8] Typing '{value}' into search input...")
+                
+                await search_input.click()
+                await asyncio.sleep(0.3)
+                await search_input.fill("")
+                await asyncio.sleep(0.2)
+                await search_input.type(value, delay=50)
+                
+                actual_value = await search_input.input_value()
+                print(f"✓ Typed value: '{actual_value}'")
+                
+                # Wait for suggestions to load
+                await asyncio.sleep(2)
+                
+                # Step 6: Wait for suggestions and click first one
+                print(f"[6/8] Waiting for suggestions...")
+                
+                suggestion_clicked = False
+                
+                try:
+                    # Ждём появления списка
+                    await self.page.wait_for_selector(
+                        '[role="option"], [role="listbox"] > *, li[class*="suggestion"], div[class*="suggestion"], div[class*="result"]',
+                        timeout=5_000,
+                        state='visible'
+                    )
+                    print(f"✓ Suggestions appeared")
+                    
+                    # Кликаем по первой опции
+                    for selector in [
+                        '[role="option"]:first-child',
+                        'li:first-child',
+                        'div[class*="suggestion"]:first-child',
+                        'div[class*="result"]:first-child',
+                        '[data-highlighted="true"]',
+                    ]:
+                        try:
+                            option = await self.page.wait_for_selector(selector, timeout=1_000, state='visible')
+                            if option:
+                                await option.click()
+                                suggestion_clicked = True
+                                print(f"✓ Clicked suggestion with selector: {selector}")
+                                break
+                        except:
+                            continue
+                    
+                except Exception as e:
+                    print(f"⚠ Error finding suggestions: {e}")
+                
+                if not suggestion_clicked:
+                    print(f"⚠ Could not click suggestion, trying keyboard...")
+                    await self.page.keyboard.press("ArrowDown")
+                    await asyncio.sleep(0.5)
+                    await self.page.keyboard.press("Enter")
+                
+                await asyncio.sleep(1)
+                
+                # Step 7: Click "Дополнительная информация" button (ОБЯЗАТЕЛЬНО!)
+                print(f"[7/8] Clicking 'Дополнительная информация' button (REQUIRED)...")
+                
+                info_button_clicked = False
+                
+                # Ищем все кнопки "Дополнительная информация"
+                info_buttons = await self.page.query_selector_all(
+                    'button:has-text("Дополнительная информация"), '
+                    'a:has-text("Дополнительная информация"), '
+                    'div:has-text("Дополнительная информация"):not(:has(div:has-text("Дополнительная информация")))'
+                )
+                
+                if info_buttons:
+                    # Выбираем кнопку с максимальным количеством информации
+                    best_button = None
+                    best_score = -1
+                    
+                    for btn in info_buttons:
+                        try:
+                            if await btn.is_visible():
+                                # Получаем родительский контейнер для оценки
+                                parent_text = await btn.evaluate('el => el.closest("div")?.innerText || ""')
+                                score = len(parent_text.split('\n'))
+                                
+                                if score > best_score:
+                                    best_score = score
+                                    best_button = btn
+                        except:
+                            continue
+                    
+                    if best_button:
+                        await best_button.click()
+                        info_button_clicked = True
+                        print(f"✓ Clicked 'Дополнительная информация' (score: {best_score})")
+                    
+                if not info_button_clicked:
+                    # Пробуем альтернативные варианты
+                    for btn_text in [
+                        "Дополнительная информация",
+                        "Dodatkowe informacje",
+                        "Additional information",
+                        "Подтвердить",
+                        "OK",
+                        "Применить",
+                    ]:
+                        try:
+                            btn = self.page.get_by_role("button", name=btn_text).first
+                            if await btn.count() > 0 and await btn.is_visible():
+                                await btn.click()
+                                info_button_clicked = True
+                                print(f"✓ Clicked button: '{btn_text}'")
+                                break
+                        except:
+                            continue
+                
+                if not info_button_clicked:
+                    print("⚠ WARNING: Could not click 'Дополнительная информация' - trying to continue...")
+                    # Пробуем просто нажать Enter
+                    await self.page.keyboard.press("Enter")
+                
+                await asyncio.sleep(1)
+                
+                # Step 8: Set radius "+ 75 km"
+                print(f"[8/8] Setting radius '+ 75 km'...")
+                await self._set_radius(label_text, "+ 75 km")
+                
+                print(f"✓ SUCCESS: {label_text} set to '{value}' with radius + 75 km")
+                print(f"{'='*60}\n")
+                return True
+                
+            except Exception as e:
+                print(f"❌ Error setting {label_text}: {e}")
+                import traceback
+                traceback.print_exc()
+                await self.page.screenshot(path=f"error_{label_text}.png")
+                return False
+
+        # ---------------------------------------------------------------------
+        # Helper: Set Date - ИСПРАВЛЕННЫЙ
+        # ---------------------------------------------------------------------
+        async def set_date_filter(label_text: str, date_from: str, date_to: str) -> bool:
+            """
+            Устанавливает диапазон дат для фильтра.
+            Формат дат: DD.MM.YYYY
+            """
+            if not date_from and not date_to:
+                print(f"No dates provided for {label_text}, skipping...")
+                return True
+                
+            print(f"\n{'='*60}")
+            print(f"Setting {label_text}: {date_from or 'N/A'} - {date_to or 'N/A'}")
+            print(f"{'='*60}")
+            
+            try:
+                # Находим лейбл
+                label_locator = self.page.get_by_text(label_text, exact=True).first
+                
+                if await label_locator.count() == 0:
+                    print(f"⚠ Label '{label_text}' not found, trying alternative...")
+                    # Пробуем частичное совпадение
+                    label_locator = self.page.get_by_text(label_text).first
+                
+                # Находим контейнер с полями дат
+                container = label_locator.locator("xpath=ancestor::div[.//input]").first
+                
+                if await container.count() == 0:
+                    container = label_locator.locator("..").locator("..")
+                
+                # Находим все input'ы в контейнере
+                inputs = container.locator("input")
+                input_count = await inputs.count()
+                
+                print(f"Found {input_count} input(s) in date container")
+                
+                if input_count >= 2:
+                    # Устанавливаем дату "От"
+                    if date_from:
+                        print(f"Setting 'from' date: {date_from}")
+                        from_input = inputs.nth(0)
+                        await from_input.click()
+                        await asyncio.sleep(0.3)
+                        await from_input.fill("")
+                        await from_input.type(date_from, delay=30)
+                        await from_input.press("Enter")
+                        await asyncio.sleep(0.5)
+                        print(f"✓ 'From' date set to {date_from}")
+                    
+                    # Устанавливаем дату "До"
+                    if date_to:
+                        print(f"Setting 'to' date: {date_to}")
+                        to_input = inputs.nth(1)
+                        await to_input.click()
+                        await asyncio.sleep(0.3)
+                        await to_input.fill("")
+                        await to_input.type(date_to, delay=30)
+                        await to_input.press("Enter")
+                        await asyncio.sleep(0.5)
+                        print(f"✓ 'To' date set to {date_to}")
+                    
+                    print(f"✓ {label_text} dates set successfully")
+                    return True
+                    
+                elif input_count == 1:
+                    # Один input - возможно, это комбинированное поле
+                    if date_from:
+                        single_input = inputs.nth(0)
+                        await single_input.click()
+                        await asyncio.sleep(0.3)
+                        await single_input.fill(date_from)
+                        await single_input.press("Enter")
+                        print(f"✓ Single date input set to {date_from}")
+                    return True
+                    
+                else:
+                    print(f"⚠ No date inputs found for {label_text}")
+                    
+                    # Альтернативный поиск: ищем input'ы по типу date
+                    date_inputs = await self.page.query_selector_all(f'input[type="date"], input[placeholder*="дата"], input[placeholder*="date"]')
+                    if date_inputs:
+                        print(f"Found {len(date_inputs)} date inputs globally")
+                        # Используем первые два
+                        if date_from and len(date_inputs) >= 1:
+                            await date_inputs[0].fill(date_from)
+                        if date_to and len(date_inputs) >= 2:
+                            await date_inputs[1].fill(date_to)
+                        return True
+                    
+                    return False
+                    
+            except Exception as e:
+                print(f"❌ Error setting {label_text}: {e}")
+                import traceback
+                traceback.print_exc()
+                await self.page.screenshot(path=f"error_date_{label_text}.png")
+                return False
+        if "destination" in filters:
+            await set_location_strict("Разгрузка", filters["destination"])
+
+        # Шаг 4: Установить даты загрузки
+        if "loading_date_from" in filters or "loading_date_to" in filters:
+            d_from = filters.get("loading_date_from", "")
+            d_to = filters.get("loading_date_to", "")
+            await set_date_filter("Дата загрузки", d_from, d_to)
+        
+        # Шаг 5: Установить даты разгрузки
+        if "unloading_date_from" in filters or "unloading_date_to" in filters:
+            d_from = filters.get("unloading_date_from", "")
+            d_to = filters.get("unloading_date_to", "")
+            await set_date_filter("Дата разгрузки", d_from, d_to)
+
+        # Шаг 6: Нажать кнопку "Поиск" (ТОЛЬКО ПОСЛЕ всех предыдущих шагов)
+        print("\n" + "=" * 60)
+        print("Clicking SEARCH button...")
+        print("=" * 60)
+        
+        try:
+            search_btn = None
+            
+            # Пробуем разные селекторы для кнопки поиска
+            for selector in [
+                'button:has-text("Поиск")',
+                'button:has-text("Szukaj")',
+                'button:has-text("Search")',
+                '[data-ctx="search-btn"]',
+                'button[type="submit"]',
+                'a[data-ctx="exchange-expanded"]',
+            ]:
+                try:
+                    btn = await self.page.wait_for_selector(selector, timeout=2_000, state='visible')
+                    if btn:
+                        search_btn = btn
+                        print(f"✓ Found search button: {selector}")
+                        break
+                except:
+                    continue
+
+            if search_btn:
+                await search_btn.click()
+                print("✓ Search button clicked!")
+                
+                # Ждём загрузки результатов
+                try:
+                    await self.page.wait_for_load_state("networkidle", timeout=10_000)
+                except:
+                    print("Warning: networkidle timeout, continuing...")
+                
+                await asyncio.sleep(3)
+                print("✓ Search completed")
+            else:
+                print("❌ Error: Search button not found!")
+                await self.page.screenshot(path="error_no_search_button.png")
+                
+        except Exception as e:
+            print(f"❌ Error clicking search: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ---------------------------------------------------------------------
+    # Parse freight list
+    # ---------------------------------------------------------------------
+    async def _parse_freight_list(self) -> List[Dict]:
+        """Parse freight list from the results page."""
+        freights_data = await self.page.evaluate(
+            """
+            () => {
+                const items = [];
+                const rows = document.querySelectorAll('[data-ctx="row"]');
+                rows.forEach(row => {
+                    try {
+                        const text = row.innerText;
+                        const lines = text.split('\\n').map(l => l.trim()).filter(l => l);
+                        const priceIdx = lines.findIndex(l => l.includes('EUR') || l.includes('€'));
+                        let price = '';
+                        let cargoInfo = '';
+                        if (priceIdx !== -1) {
+                            price = lines[priceIdx];
+                            if (priceIdx > 4) {
+                                cargoInfo = lines.slice(4, priceIdx).join(', ');
+                            }
+                        } else if (lines.length > 4) {
+                            cargoInfo = lines.slice(4).join(', ');
+                        }
+                        items.push({
+                            trans_id: row.getAttribute('data-id') || Math.random().toString(36).substr(2, 9),
+                            raw_text: text,
+                            loading_place: lines[0] || '',
+                            loading_date: lines[1] || '',
+                            unloading_place: lines[2] || '',
+                            unloading_date: lines[3] || '',
+                            cargo_info: cargoInfo,
+                            price_original: price,
+                            currency: 'EUR'
+                        });
+                    } catch (e) {
+                        console.error('Error parsing freight row:', e);
+                    }
+                });
+                return items;
+            }
+            """
+        )
+        return freights_data
+
+    # ---------------------------------------------------------------------
+    # Cleanup
+    # ---------------------------------------------------------------------
+    async def close(self):
+        """Закрытие браузера."""
+        if self.browser:
+            await self.browser.close()
+            print("✓ Browser closed")
+
+
+# ---------------------------------------------------------------------
+# Helper for quick manual testing
+# ---------------------------------------------------------------------
+async def test_scraper():
+    scraper = TransEuScraper()
+    try:
+        await scraper.start_browser(headless=False)  # headless=False для отладки
+        await scraper.login()
+        
+        # Пример фильтров с датами
+        filters = {
+            "origin": "Polska",
+            "destination": "Niemcy",
+            "loading_date_from": "05.12.2024",
+            "loading_date_to": "10.12.2024",
+            # "unloading_date_from": "06.12.2024",
+            # "unloading_date_to": "12.12.2024",
+        }
+        
+        freights = await scraper.search_freights(filters=filters)
+        print(f"\n{'='*60}")
+        print(f"Found {len(freights)} freights:")
+        print(f"{'='*60}")
+        for i, freight in enumerate(freights[:5]):
+            print(f"\n--- Freight {i+1} ---")
+            print(f"  Loading: {freight.get('loading_place')} ({freight.get('loading_date')})")
+            print(f"  Unloading: {freight.get('unloading_place')} ({freight.get('unloading_date')})")
+            print(f"  Price: {freight.get('price_original')}")
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        await scraper.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(test_scraper())

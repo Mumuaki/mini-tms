@@ -1,0 +1,27 @@
+2025/12/10-19:20:04.624 51dc Reusing MANIFEST D:\TransEU\TMSmini_.vGemini\backend\chrome_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2025/12/10-19:20:04.630 51dc Recovering log #14
+2025/12/10-19:20:04.632 51dc Reusing old log D:\TransEU\TMSmini_.vGemini\backend\chrome_profile\Default\Local Storage\leveldb/000014.log 
+2025/12/10-19:54:05.542 3ed8 Level-0 table #18: started
+2025/12/10-19:54:05.546 3ed8 Level-0 table #18: 27268 bytes OK
+2025/12/10-19:54:05.548 3ed8 Delete type=0 #14
+2025/12/10-22:34:30.171 3ed8 Level-0 table #20: started
+2025/12/10-22:34:30.177 3ed8 Level-0 table #20: 28138 bytes OK
+2025/12/10-22:34:30.179 3ed8 Delete type=0 #17
+2025/12/11-01:10:11.059 3ed8 Level-0 table #22: started
+2025/12/11-01:10:11.064 3ed8 Level-0 table #22: 22317 bytes OK
+2025/12/11-01:10:11.066 3ed8 Delete type=0 #19
+2025/12/11-01:10:11.066 3ed8 Compacting 4@0 + 1@1 files
+2025/12/11-01:10:11.073 3ed8 Generated table #23@0: 38 keys, 12225 bytes
+2025/12/11-01:10:11.073 3ed8 Compacted 4@0 + 1@1 files => 12225 bytes
+2025/12/11-01:10:11.074 3ed8 compacted to: files[ 0 1 0 0 0 0 0 ]
+2025/12/11-01:10:11.074 3ed8 Delete type=2 #12
+2025/12/11-01:10:11.075 3ed8 Delete type=2 #15
+2025/12/11-01:10:11.075 3ed8 Delete type=2 #18
+2025/12/11-01:10:11.076 3ed8 Delete type=2 #20
+2025/12/11-01:10:11.076 3ed8 Delete type=2 #22
+2025/12/11-02:54:59.529 3ed8 Level-0 table #25: started
+2025/12/11-02:54:59.535 3ed8 Level-0 table #25: 27810 bytes OK
+2025/12/11-02:54:59.537 3ed8 Delete type=0 #21
+2025/12/11-03:10:42.500 3ed8 Level-0 table #27: started
+2025/12/11-03:10:42.504 3ed8 Level-0 table #27: 29748 bytes OK
+2025/12/11-03:10:42.506 3ed8 Delete type=0 #24
