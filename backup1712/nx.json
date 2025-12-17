@@ -1,0 +1,18 @@
+{
+  "npmScope": "tmsmini",
+  "implicitDependencies": {},
+  "tasksRunnerOptions": {
+    "default": {
+      "runner": "@nrwl/workspace/tasks-runners/default",
+      "options": {
+        "cacheableOperations": ["build", "test", "migrate"],
+        "parallel": 3
+      }
+    }
+  },
+  "nxCloudAccessToken": "${NX_CLOUD_ACCESS_TOKEN}",
+  "projects": {
+    "backend": "backend.project.json",
+    "frontend": "frontend.project.json"
+  }
+}

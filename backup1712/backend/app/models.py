@@ -1,0 +1,96 @@
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy.sql import func
+from .database import Base
+
+class Freight(Base):
+    __tablename__ = "freights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trans_id = Column(String, unique=True, index=True)  # ID предложения в Trans.eu
+    
+    # Данные из Trans.eu
+    loading_place = Column(String)
+    unloading_place = Column(String)
+    loading_date = Column(String) # Store raw string to support ranges (10-12.12)
+    unloading_date = Column(String, nullable=True)
+    cargo_info = Column(String) # Вес, тип кузова и т.д.
+    weight_kg = Column(Float, nullable=True) # Parsed weight
+    price_original = Column(Float, nullable=True) # Цена от заказчика если есть
+    currency = Column(String, default="EUR")
+    
+    # Рассчитанные данные
+    distance_km = Column(Float, nullable=True)
+    cost_price = Column(Float, nullable=True) # Себестоимость
+    
+    # Detailed fields from modal
+    body_type = Column(String, nullable=True) # Тип кузова
+    capacity = Column(String, nullable=True) # Грузоподъемность/Тоннаж
+    ldm = Column(String, nullable=True) # Loading meters
+    payment_terms = Column(String, nullable=True) # Условия оплаты (200 EUR 55 days)
+    additional_description = Column(String, nullable=True) # Доп описание
+    
+    # Расчетные расстояния
+    distance_origin_to_loading = Column(Float, nullable=True) # От нас до загрузки
+    
+    # Ставки
+    rate_min = Column(Float, nullable=True)
+    rate_avg = Column(Float, nullable=True)
+    rate_max = Column(Float, nullable=True)
+    
+    # Статусы
+    is_hidden = Column(Boolean, default=False) # Черный список/скрыто
+    is_deal = Column(Boolean, default=False) # Перешло в сделку
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class Settings(Base):
+    __tablename__ = "settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True)
+    value = Column(String)
+    description = Column(String, nullable=True)
+
+class Deal(Base):
+    __tablename__ = "deals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    freight_id = Column(Integer, nullable=True) # Ссылка на груз, если создан из него
+    
+    client_name = Column(String)
+    contact_person = Column(String, nullable=True)
+    final_rate = Column(Float)
+    currency = Column(String, default="EUR")
+    
+    status = Column(String, default="new") # new, in_progress, completed, paid
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Truck(Base):
+    __tablename__ = "trucks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Truck details
+    truck_type = Column(String, default="Тентованный фургон")  # e.g. "Тентованный фургон"
+    cargo_length = Column(Float, nullable=True)  # meters
+    cargo_width = Column(Float, nullable=True)   # meters
+    cargo_height = Column(Float, nullable=True)  # meters
+    max_payload = Column(Float, nullable=True)   # max weight in kg
+    license_plate = Column(String, nullable=True)
+    driver_name = Column(String, nullable=True)
+    
+    # GPS tracking
+    gps_vehicle_code = Column(String, nullable=True)  # Code from GPS Dozor API
+    last_known_lat = Column(Float, nullable=True)
+    last_known_lng = Column(Float, nullable=True)
+    last_known_location = Column(String, nullable=True)  # Formatted address (e.g. "SK, 82106")
+    gps_updated_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Status
+    is_active = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+

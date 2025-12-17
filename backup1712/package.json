@@ -1,0 +1,13 @@
+{
+  "name": "tmsmini-repo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "nx": "nx",
+    "start:frontend": "npx nx run frontend:serve",
+    "start:backend": "npx nx run backend:serve"
+  },
+  "devDependencies": {
+    "nx": "latest"
+  }
+}

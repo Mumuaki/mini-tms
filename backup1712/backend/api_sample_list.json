@@ -1,0 +1,9 @@
+[
+  {
+    "product_name": "exchange",
+    "product_line_name": "tfc",
+    "country": "DEFAULT",
+    "authorization_mode": "AUTOMATIC",
+    "promotion_length_in_hours": 24
+  }
+]
