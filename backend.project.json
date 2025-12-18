@@ -1,0 +1,20 @@
+{
+  "name": "backend",
+  "root": "backend",
+  "sourceRoot": "backend/app",
+  "projectType": "application",
+  "targets": {
+    "serve": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "python backend/run.py" }], "cwd": "."}
+    },
+    "migrate": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "cd backend && alembic -c alembic.ini upgrade head" }] }
+    },
+    "tests": {
+      "executor": "@nrwl/workspace:run-commands",
+      "options": { "commands": [{ "command": "cd backend && pytest -q" }] }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+2025/12/02-03:56:37.648 3d24 Reusing MANIFEST D:\TMSmini\backend\chrome_profile\Default\GCM Store\Encryption/MANIFEST-000001
+2025/12/02-03:56:37.648 3d24 Recovering log #3
+2025/12/02-03:56:37.648 3d24 (ignoring error) D:\TMSmini\backend\chrome_profile\Default\GCM Store\Encryption/000003.log: dropping 677 bytes; Corruption: checksum mismatch
+2025/12/02-03:56:37.649 3d24 Reusing old log D:\TMSmini\backend\chrome_profile\Default\GCM Store\Encryption/000003.log 

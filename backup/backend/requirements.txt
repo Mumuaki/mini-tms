@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+uvloop
+sqlalchemy
+pydantic
+pydantic-settings
+python-dotenv
+requests
+playwright
+alembic
+psycopg[binary]
+pytest
+pytest-asyncio
+httpx
+pyautogui
+aiofiles

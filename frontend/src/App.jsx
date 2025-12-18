@@ -1,4 +1,5 @@
 import React from 'react';
+<<<<<<< HEAD
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import MyTrucks from './pages/MyTrucks';
@@ -16,6 +17,24 @@ function App() {
         </Routes>
       </Layout>
     </BrowserRouter>
+=======
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import DashboardLayout from './components/layout/DashboardLayout';
+import DashboardPage from './pages/DashboardPage';
+import TrucksPage from './pages/TrucksPage';
+
+function App() {
+  return (
+    <Router>
+      <DashboardLayout>
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/trucks" element={<TrucksPage />} />
+          {/* Other routes can be added here later */}
+        </Routes>
+      </DashboardLayout>
+    </Router>
+>>>>>>> 97953c3 (Initial commit from Specify template)
   );
 }
 

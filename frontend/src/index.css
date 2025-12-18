@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 @import 'tailwindcss/base';
 @import 'tailwindcss/components';
 @import 'tailwindcss/utilities';
@@ -38,4 +39,14 @@ code {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
+=======
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+>>>>>>> 97953c3 (Initial commit from Specify template)
 }

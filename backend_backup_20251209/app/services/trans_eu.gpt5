@@ -1,0 +1,379 @@
+import os
+import asyncio
+from datetime import datetime
+from typing import List, Dict, Optional
+
+from playwright.async_api import async_playwright, Browser, Page, Locator
+
+
+class TransEuScraper:
+    """Сервис для получения грузов с Trans.eu через автоматизацию браузера."""
+
+    def __init__(self):
+        self.username = os.getenv("TRANS_USER")
+        self.password = os.getenv("TRANS_PASSWORD")
+        self.base_url = "https://www.trans.eu"
+        self.login_url = "https://auth.platform.trans.eu/accounts/login"
+        self.freights_url = "https://platform.trans.eu/exchange/offers"
+
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
+        self.is_logged_in = False
+
+    # ---------------------------------------------------------------------
+    # Browser handling
+    # ---------------------------------------------------------------------
+    async def start_browser(self, headless: bool = True):
+        """Запуск браузера (пытаемся подключиться к уже запущенному CDP)."""
+        playwright = await async_playwright().start()
+
+        # Try to connect to an existing Chrome instance via CDP
+        try:
+            self.browser = await playwright.chromium.connect_over_cdp(
+                "http://localhost:9222"
+            )
+            if self.browser.contexts:
+                context = self.browser.contexts[0]
+                self.page = (
+                    context.pages[0] if context.pages else await context.new_page()
+                )
+            print("✓ Connected to existing browser via CDP")
+            return
+        except Exception:
+            print("Could not connect to existing browser, launching new one...")
+
+        # Fallback: launch a fresh Chromium instance
+        self.browser = await playwright.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
+        )
+        context = await self.browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="ru-RU",
+            timezone_id="Europe/Bratislava",
+        )
+        await context.add_init_script(
+            """
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            """
+        )
+        self.page = await context.new_page()
+        self.page.set_default_timeout(60_000)
+        print("✓ Browser started")
+
+    # ---------------------------------------------------------------------
+    # Login
+    # ---------------------------------------------------------------------
+    async def login(self):
+        if not self.page:
+            await self.start_browser()
+
+        if not self.username or not self.password:
+            raise ValueError("TRANS_USER and TRANS_PASSWORD must be set in .env")
+
+        print(f"Navigating to {self.login_url}...")
+        try:
+            await self.page.goto(
+                self.login_url, wait_until="domcontentloaded", timeout=60_000
+            )
+            print("✓ Page loaded")
+        except Exception as e:
+            print(f"Warning: Page load timeout, but continuing: {e}")
+
+        current_url = self.page.url
+        if "login" not in current_url.lower() and "auth" not in current_url.lower():
+            print(f"Already logged in (URL: {current_url})")
+            self.is_logged_in = True
+            return
+
+        email = await self._wait_any_selector(
+            [
+                'input[name="login"]',
+                'input[name="email"]',
+                'input[type="email"]',
+                'input[name="username"]',
+            ],
+            "email input",
+        )
+        await email.fill(self.username)
+
+        password = await self._wait_any_selector(
+            ['input[name="password"]', 'input[type="password"]'], "password input"
+        )
+        await password.fill(self.password)
+
+        submit = await self._wait_any_selector(
+            [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button:has-text("Войти")',
+                'button:has-text("Login")',
+                'button:has-text("Sign in")',
+            ],
+            "submit button",
+            required=False,
+        )
+
+        if submit:
+            await submit.click()
+        else:
+            await password.press("Enter")
+
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=30_000)
+        except Exception:
+            print("Warning: Timeout waiting for networkidle, continuing...")
+
+        await asyncio.sleep(2)
+
+        current_url = self.page.url
+        if "login" in current_url.lower() or "auth" in current_url.lower():
+            await self.page.screenshot(path="login_failed_debug.png")
+            raise Exception("Login failed – see login_failed_debug.png")
+
+        self.is_logged_in = True
+
+    async def _wait_any_selector(
+        self, selectors: List[str], label: str, required: bool = True
+    ) -> Locator:
+        for selector in selectors:
+            try:
+                element = await self.page.wait_for_selector(selector, timeout=5_000)
+                if element:
+                    return element
+            except Exception:
+                continue
+        if required:
+            raise RuntimeError(f"Could not find {label}")
+        return None
+
+    # ---------------------------------------------------------------------
+    # Search freights
+    # ---------------------------------------------------------------------
+    async def search_freights(self, filters: Optional[Dict] = None) -> List[Dict]:
+        if not self.is_logged_in:
+            await self.login()
+
+        print("Navigating to freights page...")
+        try:
+            await self.page.goto(
+                self.freights_url, wait_until="domcontentloaded", timeout=180_000
+            )
+            print("✓ Freights page loaded (domcontentloaded)")
+        except Exception as e:
+            print(f"Warning: domcontentloaded timeout – {e}, retrying with networkidle")
+            await self.page.goto(
+                self.freights_url, wait_until="networkidle", timeout=180_000
+            )
+            print("✓ Freights page loaded (networkidle)")
+
+        try:
+            print("Waiting for freight rows...")
+            await self.page.wait_for_selector('[data-ctx="row"]', timeout=20_000)
+            print("✓ Freight rows appeared")
+        except Exception as e:
+            print(f"Warning: Timeout waiting for [data-ctx='row']: {e}")
+
+        await asyncio.sleep(2)
+
+        if filters:
+            await self._apply_filters(filters)
+
+        freights = await self._parse_freight_list()
+        print(f"✓ Found {len(freights)} freights")
+        return freights
+
+    # ---------------------------------------------------------------------
+    # Helpers for filters
+    # ---------------------------------------------------------------------
+    async def _click_rich_info_button(self):
+        """Находим кнопку 'Дополнительная информация' с максимальным количеством текста."""
+        buttons = await self.page.locator(
+            'button:has-text("Дополнительная информация")'
+        ).all()
+        if not buttons:
+            raise RuntimeError("Кнопки 'Дополнительная информация' не найдены")
+
+        best_btn, best_score = None, -1
+        for btn in buttons:
+            text = (await btn.inner_text()).strip()
+            score = len(text.splitlines()) or len(text)
+            if score > best_score:
+                best_score = score
+                best_btn = btn
+
+        await best_btn.click()
+        await asyncio.sleep(0.5)
+
+    async def _set_location_with_radius(self, label_text: str, value: str):
+        print(f"Setting {label_text}: {value}")
+        label = self.page.get_by_text(label_text, exact=True).first
+        container = label.locator("..").locator("..")
+        input_box = container.locator('input[type="text"]').first
+
+        await input_box.click()
+        await asyncio.sleep(0.3)
+
+        modal_input = await self.page.get_by_placeholder("Найти").first
+        await modal_input.fill(value)
+        await asyncio.sleep(1)
+
+        await modal_input.press("Enter")
+        await asyncio.sleep(0.7)
+
+        # выбираем радиус
+        radius_button = container.locator('button:has-text("+ 0 km")').first
+        await radius_button.click()
+        await container.locator('li:has-text("+ 75 km")').click()
+        await asyncio.sleep(0.3)
+
+    async def _set_date_range(self, label_text: str, date_from: str, date_to: str):
+        block = self.page.get_by_text(label_text, exact=True).locator("..").locator("..")
+        inputs = block.locator("input")
+        if date_from:
+            await inputs.nth(0).fill(date_from)
+            await inputs.nth(0).press("Enter")
+        if date_to:
+            await inputs.nth(1).fill(date_to)
+            await inputs.nth(1).press("Enter")
+
+    # ---------------------------------------------------------------------
+    # Apply filters
+    # ---------------------------------------------------------------------
+    async def _apply_filters(self, filters: Dict):
+        print(f"Applying filters: {filters}")
+
+        try:
+            expand_btn = await self.page.wait_for_selector(
+                'button:has-text("Развернуть фильтры")', timeout=3_000
+            )
+            if expand_btn:
+                await expand_btn.click()
+                await asyncio.sleep(1)
+        except Exception:
+            pass
+
+        await self._click_rich_info_button()
+
+        if "origin" in filters:
+            await self._set_location_with_radius("Загрузка", filters["origin"])
+        if "destination" in filters:
+            await self._set_location_with_radius("Разгрузка", filters["destination"])
+
+        await self._set_date_range(
+            "Дата загрузки",
+            filters.get("loading_date_from", ""),
+            filters.get("loading_date_to", ""),
+        )
+        await self._set_date_range(
+            "Дата разгрузки",
+            filters.get("unloading_date_from", ""),
+            filters.get("unloading_date_to", ""),
+        )
+
+        print("Clicking search button...")
+        search_btn = await self._wait_any_selector(
+            [
+                'button:has-text("Поиск")',
+                '[data-ctx="search-btn"]',
+                'a[data-ctx="exchange-expanded"]',
+            ],
+            "search button",
+        )
+        await search_btn.click()
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=5_000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+
+    # ---------------------------------------------------------------------
+    # Parse freight list
+    # ---------------------------------------------------------------------
+    async def _parse_freight_list(self) -> List[Dict]:
+        freights_data = await self.page.evaluate(
+            """
+            () => {
+                const items = [];
+                const rows = document.querySelectorAll('[data-ctx="row"]');
+                rows.forEach(row => {
+                    try {
+                        const text = row.innerText;
+                        const lines = text.split('\\n').map(l => l.trim()).filter(l => l);
+                        const priceIdx = lines.findIndex(l => l.includes('EUR') || l.includes('€'));
+                        let price = '';
+                        let cargoInfo = '';
+                        if (priceIdx !== -1) {
+                            price = lines[priceIdx];
+                            if (priceIdx > 4) {
+                                cargoInfo = lines.slice(4, priceIdx).join(', ');
+                            }
+                        } else if (lines.length > 4) {
+                            cargoInfo = lines.slice(4).join(', ');
+                        }
+                        items.push({
+                            trans_id: row.getAttribute('data-id') || Math.random().toString(36).substr(2, 9),
+                            raw_text: text,
+                            loading_place: lines[0] || '',
+                            loading_date: lines[1] || '',
+                            unloading_place: lines[2] || '',
+                            unloading_date: lines[3] || '',
+                            cargo_info: cargoInfo,
+                            price_original: price,
+                            currency: 'EUR'
+                        });
+                    } catch (e) {
+                        console.error('Error parsing freight row:', e);
+                    }
+                });
+                return items;
+            }
+            """
+        )
+        return freights_data
+
+    # ---------------------------------------------------------------------
+    # Cleanup
+    # ---------------------------------------------------------------------
+    async def close(self):
+        if self.browser:
+            await self.browser.close()
+            print("✓ Browser closed")
+
+
+async def test_scraper():
+    scraper = TransEuScraper()
+    try:
+        await scraper.start_browser(headless=False)
+        await scraper.login()
+        filters = {
+            "origin": "Polska",
+            "destination": "Niemcy",
+            "loading_date_from": "01.12.2025",
+            "loading_date_to": "03.12.2025",
+            "unloading_date_from": "04.12.2025",
+            "unloading_date_to": "05.12.2025",
+        }
+        freights = await scraper.search_freights(filters=filters)
+        print(f"\nFound {len(freights)} freights:")
+        for freight in freights[:3]:
+            print(freight)
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await scraper.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(test_scraper())
